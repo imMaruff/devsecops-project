@@ -18,7 +18,7 @@ app.get('/', (req, res) => {
       </head>
       <body>
         <div class="card">
-          <h1>🚀 DevSecOps Demo</h1>
+          <h1>DevSecOps Demo</h1>
           <p>Node.js App running in Docker</p>
           <span class="badge">✅ Secured & Deployed</span>
           <p style="margin-top:20px">Host: ${process.env.HOSTNAME || 'localhost'}</p>
