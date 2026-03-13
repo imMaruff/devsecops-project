@@ -4,7 +4,6 @@ pipeline {
     environment {
         TERRAFORM_DIR = "terraform"
         SCAN_REPORT   = "trivy-report.txt"
-        APP_IMAGE     = "devsecops-app"
     }
 
     stages {
@@ -23,30 +22,24 @@ pipeline {
                 echo '🔧 Installing Trivy and Terraform...'
                 sh '''
                     apt-get update -y -q
-
-                    # Install curl and wget if missing
-                    apt-get install -y -q curl wget unzip gnupg apt-transport-https
+                    apt-get install -y -q curl wget unzip
 
                     # Install Trivy
-                    if ! command -v trivy &> /dev/null; then
-                        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-                    fi
-                    echo "Trivy version: $(trivy --version)"
+                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+                    echo "Trivy: $(trivy --version | head -1)"
 
-                    # Install Terraform
-                    if ! command -v terraform &> /dev/null; then
-                        wget -q https://releases.hashicorp.com/terraform/1.7.0/terraform_1.7.0_linux_amd64.zip -O /tmp/tf.zip
-                        unzip -q /tmp/tf.zip -d /usr/local/bin/
-                        chmod +x /usr/local/bin/terraform
-                    fi
-                    echo "Terraform version: $(terraform --version)"
+                    # Install Terraform - use -o flag to force overwrite without prompt
+                    wget -q https://releases.hashicorp.com/terraform/1.7.0/terraform_1.7.0_linux_amd64.zip -O /tmp/tf.zip
+                    unzip -o -q /tmp/tf.zip -d /usr/local/bin/
+                    chmod +x /usr/local/bin/terraform
+                    echo "Terraform: $(terraform --version | head -1)"
                 '''
             }
         }
 
         stage('Infrastructure Security Scan') {
             steps {
-                echo '🔍 Scanning Terraform code for security issues with Trivy...'
+                echo '🔍 Scanning Terraform code for security vulnerabilities...'
                 script {
                     def scanExit = sh(
                         script: """
@@ -60,6 +53,8 @@ pipeline {
                                 --severity HIGH,CRITICAL \\
                                 --format table \\
                                 ${TERRAFORM_DIR}/ 2>&1 | tee ${SCAN_REPORT}
+
+                            echo "=========================================="
                         """,
                         returnStatus: true
                     )
@@ -74,19 +69,21 @@ pipeline {
 ============================================================
   Trivy found HIGH/CRITICAL issues in your Terraform code.
 
-  AI PROMPT USED FOR REMEDIATION:
-  "Analyze this Trivy report and fix all HIGH/CRITICAL issues
-   in my Terraform code. For each fix explain the risk and
-   the security principle applied."
+  AI PROMPT USED FOR REMEDIATION (Claude):
+  "Analyze this Trivy security report and rewrite my
+   Terraform code to fix all HIGH and CRITICAL issues.
+   For each fix explain: (1) the risk, (2) what was changed,
+   (3) the security principle applied."
 
   See README.md for full AI Usage Log.
 ============================================================
                         """
-                        error("❌ Security scan FAILED - vulnerabilities found!")
+                        error("❌ Security scan FAILED - vulnerabilities found. Fix and re-run.")
                     } else {
                         echo """
 ============================================================
-  ✅ SECURITY SCAN PASSED - Zero critical vulnerabilities
+  ✅ SECURITY SCAN PASSED
+  Zero HIGH/CRITICAL vulnerabilities found in Terraform code
 ============================================================
                         """
                     }
@@ -129,11 +126,11 @@ pipeline {
             echo """
 ============================================================
   🎉 PIPELINE COMPLETED SUCCESSFULLY
-  ✅ Checkout        - done
-  ✅ Trivy IaC scan  - PASSED (zero critical issues)
-  ✅ Terraform       - validated
-  ✅ Docker image    - built
-  Ready for deployment! 🚀
+  ✅ Checkout             - done
+  ✅ Trivy IaC Scan       - PASSED (zero critical issues)
+  ✅ Terraform Validate   - PASSED
+  ✅ Terraform Plan       - complete
+  Infrastructure is secure and ready for deployment! 🚀
 ============================================================
             """
         }
@@ -141,8 +138,9 @@ pipeline {
             echo """
 ============================================================
   ❌ PIPELINE FAILED
-  Security vulnerabilities found in infrastructure code.
-  Copy the Trivy report above, use AI to fix, then re-run.
+  Review the stage that failed above.
+  If security scan failed: copy Trivy report, use AI to fix,
+  update terraform code, commit and re-run.
 ============================================================
             """
         }
