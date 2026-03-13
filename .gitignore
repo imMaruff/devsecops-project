@@ -1,0 +1,23 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/tfplan
+terraform/.terraform.lock.hcl
+
+# Node
+app/node_modules/
+
+# Jenkins
+jenkins_home/
+
+# Secrets - NEVER commit these
+*.pem
+*.key
+terraform/terraform.tfvars
+.env
+
+# OS
+.DS_Store
+
+.README.md

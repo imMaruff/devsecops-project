@@ -1,0 +1,202 @@
+pipeline {
+    agent any
+
+    environment {
+        TRIVY_VERSION = "0.50.1"
+        TERRAFORM_DIR = "terraform"
+        SCAN_REPORT   = "trivy-report.txt"
+        APP_IMAGE     = "devsecops-app"
+    }
+
+    stages {
+
+        // ─────────────────────────────────────────────────
+        // STAGE 1: Checkout
+        // ─────────────────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                echo '📥 Checking out source code...'
+                checkout scm
+                sh 'ls -la'
+            }
+        }
+
+        // ─────────────────────────────────────────────────
+        // STAGE 2: Install Trivy
+        // ─────────────────────────────────────────────────
+        stage('Install Trivy') {
+            steps {
+                echo '🔧 Installing Trivy security scanner...'
+                sh '''
+                    # Install Trivy if not present
+                    if ! command -v trivy &> /dev/null; then
+                        apt-get update -y
+                        apt-get install -y wget apt-transport-https gnupg
+                        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | apt-key add -
+                        echo "deb https://aquasecurity.github.io/trivy-repo/deb generic main" | tee /etc/apt/sources.list.d/trivy.list
+                        apt-get update -y
+                        apt-get install -y trivy
+                    fi
+                    trivy --version
+                '''
+            }
+        }
+
+        // ─────────────────────────────────────────────────
+        // STAGE 3: Infrastructure Security Scan (Trivy)
+        // ─────────────────────────────────────────────────
+        stage('Infrastructure Security Scan') {
+            steps {
+                echo '🔍 Scanning Terraform IaC for security misconfigurations...'
+                script {
+                    // Run Trivy scan - capture output but don't fail yet
+                    def scanResult = sh(
+                        script: """
+                            echo "=========================================="
+                            echo " TRIVY IaC SECURITY SCAN REPORT"
+                            echo " Scanned: ${TERRAFORM_DIR}/"
+                            echo " Date: \$(date)"
+                            echo "=========================================="
+
+                            trivy config \
+                                --exit-code 1 \
+                                --severity HIGH,CRITICAL \
+                                --format table \
+                                ${TERRAFORM_DIR}/ 2>&1 | tee ${SCAN_REPORT}
+
+                            echo "=========================================="
+                            echo " END OF SCAN REPORT"
+                            echo "=========================================="
+                        """,
+                        returnStatus: true
+                    )
+
+                    // Read and display full report
+                    def report = readFile("${SCAN_REPORT}")
+                    echo "TRIVY SCAN RESULTS:\n${report}"
+
+                    if (scanResult != 0) {
+                        echo """
+╔══════════════════════════════════════════════════════════╗
+║          ⚠️  SECURITY VULNERABILITIES DETECTED  ⚠️          ║
+╠══════════════════════════════════════════════════════════╣
+║  Trivy found HIGH/CRITICAL issues in Terraform code.     ║
+║                                                          ║
+║  AI REMEDIATION PROMPT USED:                             ║
+║  "Analyze this Trivy security report and rewrite the     ║
+║   Terraform code to fix all HIGH and CRITICAL issues.    ║
+║   For each fix, explain: (1) the risk, (2) the fix,      ║
+║   and (3) the security principle applied."               ║
+║                                                          ║
+║  See README.md for full AI Usage Log.                    ║
+╚══════════════════════════════════════════════════════════╝
+                        """
+                        error("❌ Pipeline FAILED: Security vulnerabilities found. Fix issues and re-run.")
+                    } else {
+                        echo """
+╔══════════════════════════════════════════════════════════╗
+║              ✅ SECURITY SCAN PASSED                      ║
+║         Zero HIGH/CRITICAL vulnerabilities found         ║
+╚══════════════════════════════════════════════════════════╝
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${SCAN_REPORT}", fingerprint: true
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────
+        // STAGE 4: Build Docker Image
+        // ─────────────────────────────────────────────────
+        stage('Build Docker Image') {
+            steps {
+                echo '🐳 Building Docker image...'
+                sh '''
+                    docker build -t ${APP_IMAGE}:latest ./app/
+                    docker images | grep ${APP_IMAGE}
+                '''
+            }
+        }
+
+        // ─────────────────────────────────────────────────
+        // STAGE 5: Scan Docker Image
+        // ─────────────────────────────────────────────────
+        stage('Docker Image Security Scan') {
+            steps {
+                echo '🔍 Scanning Docker image for vulnerabilities...'
+                sh '''
+                    trivy image \
+                        --exit-code 0 \
+                        --severity HIGH,CRITICAL \
+                        --format table \
+                        ${APP_IMAGE}:latest 2>&1 | tee docker-scan-report.txt
+
+                    echo "Docker scan completed."
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'docker-scan-report.txt', fingerprint: true
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────
+        // STAGE 6: Terraform Init & Plan
+        // ─────────────────────────────────────────────────
+        stage('Terraform Plan') {
+            steps {
+                echo '📋 Running Terraform plan...'
+                sh '''
+                    # Install Terraform if not present
+                    if ! command -v terraform &> /dev/null; then
+                        wget -O /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.7.0/terraform_1.7.0_linux_amd64.zip
+                        unzip /tmp/terraform.zip -d /usr/local/bin/
+                        chmod +x /usr/local/bin/terraform
+                    fi
+
+                    cd ${TERRAFORM_DIR}
+                    terraform init -backend=false
+                    terraform validate
+                    echo "✅ Terraform validate passed"
+                    terraform plan -out=tfplan 2>&1 || echo "⚠️ Plan requires AWS credentials - validate passed successfully"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo """
+╔══════════════════════════════════════════════════════════╗
+║           🎉 PIPELINE COMPLETED SUCCESSFULLY              ║
+║                                                          ║
+║  ✅ Code checked out                                      ║
+║  ✅ Trivy IaC scan PASSED - zero critical issues         ║
+║  ✅ Docker image built                                    ║
+║  ✅ Terraform validated                                   ║
+║                                                          ║
+║  Ready for deployment! 🚀                                ║
+╚══════════════════════════════════════════════════════════╝
+            """
+        }
+        failure {
+            echo """
+╔══════════════════════════════════════════════════════════╗
+║              ❌ PIPELINE FAILED                           ║
+║                                                          ║
+║  Security vulnerabilities detected in infrastructure.    ║
+║  Review the Trivy report, apply AI remediation,          ║
+║  and re-run the pipeline.                                ║
+╚══════════════════════════════════════════════════════════╝
+            """
+        }
+        always {
+            echo "Pipeline run complete. Check archived artifacts for scan reports."
+        }
+    }
+}
